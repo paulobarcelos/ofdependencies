@@ -1,0 +1,168 @@
+#!/bin/bash
+
+function getAllInfo {
+	getOFInfo
+	getAddonsInfo
+}
+function getOFInfo {
+	goToOF
+	getInfo
+}
+function getAddonsInfo {
+	local OFOrigin=$(goToOF;getOrigin;)
+	listAddons | 
+	while read line
+	do
+    	goToAddon "$line"
+    	local addonOrigin=$(getOrigin)
+    	if [ "$addonOrigin" != "$OFOrigin" ]
+    		then 
+    			echo "$addonOrigin"
+    			getBranch
+    			getCommit
+    	fi
+	done
+}
+function listAddons {
+	goToProject
+	if [ -f addons.make ]
+	then
+		local result=$(cat addons.make)
+	fi
+	terminateIfEmpty "$result" "Directory seems to not contain an OF project, addons.make was not found."
+	echo "$result"
+}
+function goToProject {
+	cd "$PROJECT_DIR"
+}
+function goToAddon {
+	goToProject
+	cd "../../../addons/$1"
+}
+function goToOF {
+	goToProject
+	cd "../../../"
+}
+function getInfo {
+	getOrigin
+	getBranch
+	getCommit
+}
+function compile {
+	local result=$(xcodebuild -configuration Release | grep \*\*\ BUILD\ SUCCEEDED\ \*\*)
+	if [ -z "$result" ]
+		then
+			echo "Failure"
+	fi	
+}
+function getOrigin {
+	local result=$(echo `git remote show origin | grep Fetch |  sed s_\ \ Fetch\ URL:\ __`)
+	terminateIfEmpty "$result" "Couldn't get the repository origin"
+	echo "$result"
+}
+function getBranch {
+	local result=$(echo `git branch | grep \* | sed s_\*\ __`)
+	terminateIfEmpty "$result" "Couldn't get the current branch."
+	echo "$result"
+}
+function getCommit {
+	local result=$(echo `git rev-parse HEAD`)
+	terminateIfEmpty "$result" "Couldn't get the current commit."
+	echo "$result"
+}
+function terminateIfEmpty {
+	if [ -z "$1" ]
+		then
+			terminate "$2"		
+	fi
+}
+function terminateIfNotEmpty {
+	if [ ! -z "$1" ]
+		then	
+			terminate "$2"
+	fi
+}
+function initCapture {
+	goToProject
+	local compileSuccess=$(compile)
+	if [ -z "$compileSuccess" ]
+		then
+			getAllInfo |
+			while read line
+			do
+				echo "$line" >> "$PROJECT_DIR/.dependencies"
+			done
+		else
+			terminate "Project is not compiling, cannot capture."
+	fi
+}
+function initClone {
+	echo "init clone"
+}
+function initUpdate {
+	echo "init update"
+}
+function initHelp {
+	echo -e "ofdependencies 0.0.1"
+	echo -e "sample usage:\tofdependencies [action] [OF project dir - optional, defaults to current dir]"
+	echo -e ""
+	echo -e "usage:\tofdependencies help\tDisplays this information."
+	echo -e ""
+	echo -e "usage:\tofdependencies capture\tTries to compile the project and, if successfull"
+	echo -e "\t\t\t\tstore all git information from OpenFrameworks"
+	echo -e "\t\t\t\tand addons dependencies."
+	echo -e ""
+	echo -e "usage:\tofdependencies clone\tClone all missing addons."
+	echo -e ""
+	echo -e "usage:\tofdependencies update\tUpdates Openframewors and addons to latest commit"
+}
+
+## 
+# Terminates the script from anywhere
+##
+trap "exit 1" TERM
+export TOP_PID=$$
+function terminate {
+	if [ ! -z "$1" ]
+		then
+			echo "$1"
+	fi	
+	kill -s TERM $TOP_PID
+}
+# Store project directory 
+if [ -z "$2" ]
+	then
+		PROJECT_DIR="."
+	else
+		PROJECT_DIR="$2"
+fi
+if [ -d "$PROJECT_DIR" ]
+	then
+		PROJECT_DIR=$(pwd -P)
+	else
+		terminate "$PROJECT_DIR is not a valid project direcory."
+fi
+
+# Handle arguments
+case "$1" in
+	'capture')
+		initCapture
+		;;
+	'clone')
+		initClone
+		;;
+	'update')
+		initUpdate
+		;;
+	'help')
+		initHelp
+		;;
+	'')
+		echo "You have't passed any arguments."
+		terminate "More info with: \"ofdependencies help\""
+		;;
+	*)
+		echo "$1 is not a valid option."
+		terminate "More info with: \"ofdependencies help\""
+		;;
+esac
