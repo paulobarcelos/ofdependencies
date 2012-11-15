@@ -1,5 +1,160 @@
 #!/bin/bash
+## 
+# Actions entry points
+##
+function _capture {
+	goToProject
+	echo "Trying to complie project..."
+	local compileSuccess=$(compile)
+	if [ -z "$compileSuccess" ]
+		then
+			> "$PROJECT_DIR/.dependencies"
+			getAllInfo |
+			while read line
+			do
+				echo "$line" >> "$PROJECT_DIR/.dependencies"
+			done
+			echo "Project compiles fine. The \".dependencies\" file was successfully generated."
+		else
+			terminate "Project is not compiling, \".dependencies\" file could not be genreated."
+	fi
+}
+function _clone {
+	local deps="$PROJECT_DIR/.dependencies"
+	goToProject
+	if [ ! -f "$deps" ]
+	then
+		terminate "$deps file don't exists, cannot clone."
+	fi
+	
+	local totalLines=$(cat $deps | sed '/^\s*$/d' | wc -l)
+	local totalUnits=$(($totalLines/4))
+	local totalAddons=$(($totalUnits-1))
 
+	if [ "$totalAddons" -eq 0 ]
+	then
+		terminate "There are no addons to be cloned."
+	fi
+
+	# clone addons
+
+	for i in $(seq 0 $(($totalAddons-1)))
+	do
+		local nameLine=$(($i*4+5))
+		local originLine=$(($i*4+6))
+		local branchLine=$(($i*4+7))
+		local commitLine=$(($i*4+8))
+
+		goToProject
+		local origin=$(sed -n "$originLine"p "$deps")
+		goToAddonsDir
+		git clone $origin
+		#git clone "$origin"
+		#local branchLine=$(($i*3+5))
+		#sed -n "$branchLine"p "$deps"
+		#local commitLine=$(($i*3+6))
+		#sed -n "$commitLine"p "$deps"
+	done
+}
+function _update {
+	echo "A clone will be performed prior to update to make sure all addons are in place."
+	_clone
+
+	local deps="$PROJECT_DIR/.dependencies"
+	goToProject
+	if [ ! -f "$deps" ]
+	then
+		terminate "$deps file don't exists, cannot clone."
+	fi
+	
+	local totalLines=$(cat $deps | sed '/^\s*$/d' | wc -l)
+	local totalUnits=$(($totalLines/4))
+	local totalAddons=$(($totalUnits-1))
+
+	# update OF
+	goToOF
+	echo "Updating OF..."
+	git fetch origin
+	git checkout master
+	git merge origin/master
+	git checkout $(sed -n 3p "$deps")
+	git merge origin/$(sed -n 3p "$deps")	
+
+	# update addons
+	if [  "$totalAddons" -eq 0 ]
+	then
+		terminate "There are no addons to be update."
+	fi
+
+	for i in $(seq 0 $(($totalAddons-1)))
+	do
+		local name=$(sed -n $(($i*4+5))p "$deps")
+		local origin=$(sed -n $(($i*4+6))p "$deps")
+		local branch=$(sed -n $(($i*4+7))p "$deps")
+		local commit=$(sed -n $(($i*4+8))p "$deps")
+		goToAddon $name
+		echo "Updating $name..."
+		git fetch origin
+		git checkout master
+		git merge origin/master
+		git checkout $branch
+		git merge origin/$branch
+	done
+}
+function _help {
+	echo -e "ofdependencies 0.0.1"
+	echo -e "sample usage:\tofdependencies [action] [OF project dir - optional, defaults to current dir]"
+	echo -e ""
+	echo -e "usage:\tofdependencies help\tDisplays this information."
+	echo -e ""
+	echo -e "usage:\tofdependencies capture\tTries to compile the project and, if successfull"
+	echo -e "\t\t\t\tstore all git information from OpenFrameworks"
+	echo -e "\t\t\t\tand addons dependencies."
+	echo -e ""
+	echo -e "usage:\tofdependencies clone\tClone all missing addons."
+	echo -e ""
+	echo -e "usage:\tofdependencies update\tUpdates Openframewors and addons to latest commit"
+}
+## 
+# Project Helpers
+##
+function listAddons {
+	goToProject
+	if [ -f addons.make ]
+	then
+		local result=$(cat addons.make)
+	fi
+	terminateIfEmpty "$result" "Directory seems to not contain an OF project, addons.make was not found."
+	echo "$result"
+}
+function compile {
+	local result=$(xcodebuild -configuration Release | grep \*\*\ BUILD\ SUCCEEDED\ \*\*)
+	if [ -z "$result" ]
+		then
+			echo "Failure"
+	fi	
+}
+## 
+# Go to helpers
+##
+function goToProject {
+	cd "$PROJECT_DIR"
+}
+function goToAddonsDir {
+	goToProject
+	cd "../../../addons/"
+}
+function goToAddon {
+	goToProject
+	cd "../../../addons/$1"
+}
+function goToOF {
+	goToProject
+	cd "../../../"
+}
+## 
+# Info helpers
+##
 function getAllInfo {
 	getOFInfo
 	getAddonsInfo
@@ -17,43 +172,21 @@ function getAddonsInfo {
     	local addonOrigin=$(getOrigin)
     	if [ "$addonOrigin" != "$OFOrigin" ]
     		then 
+    			getName
     			echo "$addonOrigin"
     			getBranch
     			getCommit
     	fi
 	done
 }
-function listAddons {
-	goToProject
-	if [ -f addons.make ]
-	then
-		local result=$(cat addons.make)
-	fi
-	terminateIfEmpty "$result" "Directory seems to not contain an OF project, addons.make was not found."
-	echo "$result"
-}
-function goToProject {
-	cd "$PROJECT_DIR"
-}
-function goToAddon {
-	goToProject
-	cd "../../../addons/$1"
-}
-function goToOF {
-	goToProject
-	cd "../../../"
-}
 function getInfo {
+	getName
 	getOrigin
 	getBranch
 	getCommit
 }
-function compile {
-	local result=$(xcodebuild -configuration Release | grep \*\*\ BUILD\ SUCCEEDED\ \*\*)
-	if [ -z "$result" ]
-		then
-			echo "Failure"
-	fi	
+function getName {
+	echo ${PWD##*/}
 }
 function getOrigin {
 	local result=$(echo `git remote show origin | grep Fetch |  sed s_\ \ Fetch\ URL:\ __`)
@@ -70,6 +203,9 @@ function getCommit {
 	terminateIfEmpty "$result" "Couldn't get the current commit."
 	echo "$result"
 }
+## 
+# Terminate helpers
+##
 function terminateIfEmpty {
 	if [ -z "$1" ]
 		then
@@ -82,44 +218,6 @@ function terminateIfNotEmpty {
 			terminate "$2"
 	fi
 }
-function initCapture {
-	goToProject
-	local compileSuccess=$(compile)
-	if [ -z "$compileSuccess" ]
-		then
-			getAllInfo |
-			while read line
-			do
-				echo "$line" >> "$PROJECT_DIR/.dependencies"
-			done
-		else
-			terminate "Project is not compiling, cannot capture."
-	fi
-}
-function initClone {
-	echo "init clone"
-}
-function initUpdate {
-	echo "init update"
-}
-function initHelp {
-	echo -e "ofdependencies 0.0.1"
-	echo -e "sample usage:\tofdependencies [action] [OF project dir - optional, defaults to current dir]"
-	echo -e ""
-	echo -e "usage:\tofdependencies help\tDisplays this information."
-	echo -e ""
-	echo -e "usage:\tofdependencies capture\tTries to compile the project and, if successfull"
-	echo -e "\t\t\t\tstore all git information from OpenFrameworks"
-	echo -e "\t\t\t\tand addons dependencies."
-	echo -e ""
-	echo -e "usage:\tofdependencies clone\tClone all missing addons."
-	echo -e ""
-	echo -e "usage:\tofdependencies update\tUpdates Openframewors and addons to latest commit"
-}
-
-## 
-# Terminates the script from anywhere
-##
 trap "exit 1" TERM
 export TOP_PID=$$
 function terminate {
@@ -129,6 +227,10 @@ function terminate {
 	fi	
 	kill -s TERM $TOP_PID
 }
+
+##
+# Main entry point
+##
 # Store project directory 
 if [ -z "$2" ]
 	then
@@ -142,20 +244,19 @@ if [ -d "$PROJECT_DIR" ]
 	else
 		terminate "$PROJECT_DIR is not a valid project direcory."
 fi
-
 # Handle arguments
 case "$1" in
 	'capture')
-		initCapture
+		_capture
 		;;
 	'clone')
-		initClone
+		_clone
 		;;
 	'update')
-		initUpdate
+		_update
 		;;
 	'help')
-		initHelp
+		_help
 		;;
 	'')
 		echo "You have't passed any arguments."
